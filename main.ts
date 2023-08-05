@@ -1,134 +1,132 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { Plugin, Editor, EditorPosition } from 'obsidian';
+import { keymap } from '@codemirror/view'
+import { Extension, Prec } from '@codemirror/state';
+import * as fs from 'fs';
 
-// Remember to rename these classes and interfaces!
+class SpellChecker {
+	private dictWords: string[];
+	private wordCount: Map<string, number> = new Map();
+	private totalCount: number = 0;
+	private wordProbs: Map<string, number> = new Map();
 
-interface MyPluginSettings {
-	mySetting: string;
-}
+	constructor(dictWords: string[]) {
+		this.dictWords = dictWords;
+		dictWords.forEach((word) => {
+			const lowercaseWord = word.toLowerCase();
+			this.wordCount.set(lowercaseWord, (this.wordCount.get(lowercaseWord) || 0) + 1);
+		});
+		this.totalCount = [...this.wordCount.values()].reduce((sum, count) => sum + count, 0);
+		this.wordProbs = new Map(
+			[...this.wordCount.entries()].map(([word, count]) => [word, count / this.totalCount])
+		);
+	}
 
-const DEFAULT_SETTINGS: MyPluginSettings = {
-	mySetting: 'default'
+	edit1(word: string) {
+		const letters = 'abcdefghijklmnopqrstuvwxyz';
+		const splits = Array.from({ length: word.length + 1 }, (_, i) => [word.slice(0, i), word.slice(i)]);
+		const deletes = splits.filter(([, r]) => r.length > 0).map(([l, r]) => l + r.slice(1));
+		const swaps = splits.filter(([, r]) => r.length > 1).map(([l, r]) => l + r[1] + r[0] + r.slice(2));
+		const replaces = splits
+			.filter(([, r]) => r.length > 0)
+			.map(([l, r]) => letters.split('').map((c) => l + c + r.slice(1)))
+			.flat();
+		const inserts = splits
+			.map(([l, r]) => letters.split('').map((c) => l + c + r))
+			.flat();
+		return new Set([...deletes, ...swaps, ...replaces, ...inserts]);
+	}
+
+	edit2(word: string) {
+		return new Set(
+			Array.from(this.edit1(word)).map((e1) => Array.from(this.edit1(e1))).flat()
+		);
+	}
+
+
+	check(word: string): string {
+		let word_ = word.toLowerCase();
+		if (this.dictWords.includes(word_)) {
+			return word;
+		}
+		const candidates = this.edit1(word_).size
+			? this.edit1(word_)
+			: this.edit2(word_).size
+				? this.edit2(word_)
+				: new Set([word_]);
+		const validCandidates = [...candidates].filter((w) => this.dictWords.includes(w));
+		return [...validCandidates]
+			.map((c) => [c, this.wordProbs.get(c) || 0])
+			.sort((a, b) => Number(b[1]) - Number(a[1]))
+			.values().next().value[0];
+	}
 }
 
 export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+	private currentWord: string = '';
+	private replacement: string | undefined = undefined;
+	private dictPath = 'E:\\笔记\\.obsidian\\plugins\\spell_corrector\\dict.txt';
+	private dictWords: string[];
+	private spellChecker: SpellChecker | null = null;
+
+	private printCurrentWord = (): Extension => Prec.high(keymap.of([
+		{
+			key: 'Space',
+			run: (): boolean => {
+				this.replacement = this.spellChecker?.check(this.currentWord);
+				if (this.replacement && this.replacement === this.currentWord) {
+					return false;
+				}
+				console.log(this.replacement);
+				const editor = this.app.workspace.activeEditor?.editor;
+				if (editor) {
+					this.replaceWrongWord(editor);
+				}
+				return false;
+			}
+		}
+	]))
+
+	private loadDict(filepath: string): void {
+		try {
+			const content = fs.readFileSync(filepath, 'utf-8');
+			this.dictWords = content.trim().split('\r\n');
+		}
+		catch (error) {
+			console.error('Error reading from file:', error);
+			this.dictWords = [];
+		}
+	}
+
+	private replaceWrongWord(editor: Editor) {
+		if (this.replacement && this.currentWord) {
+			const cursor = editor.getCursor();
+			const from: EditorPosition = { line: cursor.line, ch: cursor.ch - this.currentWord.length };
+			const to: EditorPosition = { line: cursor.line, ch: cursor.ch };
+			editor.replaceRange(this.replacement, from, to);
+		}
+	}
+
+	getCurrentWord(editor: Editor) {
+		// Your code to handle cursor activity and get the current word
+		const cursor = editor.getCursor();
+		const line = editor.getLine(cursor.line);
+		const wordRegex = /[\w]+/g;
+		const wordsInLine = line.match(wordRegex) || [];
+		const currentWord = wordsInLine.find((word) => {
+			const wordStart = line.lastIndexOf(word, cursor.ch);
+			const wordEnd = wordStart + word.length;
+			return cursor.ch >= wordStart && cursor.ch <= wordEnd;
+		});
+		if (currentWord) {
+			this.currentWord = currentWord;
+		}
+	}
 
 	async onload() {
-		await this.loadSettings();
-
-		// This creates an icon in the left ribbon.
-		const ribbonIconEl = this.addRibbonIcon('dice', 'Sample Plugin', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
-		// Perform additional things with the ribbon
-		ribbonIconEl.addClass('my-plugin-ribbon-class');
-
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status Bar Text');
-
-		// This adds a simple command that can be triggered anywhere
-		this.addCommand({
-			id: 'open-sample-modal-simple',
-			name: 'Open sample modal (simple)',
-			callback: () => {
-				new SampleModal(this.app).open();
-			}
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'sample-editor-command',
-			name: 'Sample editor command',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				console.log(editor.getSelection());
-				editor.replaceSelection('Sample Editor Command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-sample-modal-complex',
-			name: 'Open sample modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
-
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
-				}
-			}
-		});
-
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
-
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			console.log('click', evt);
-		});
-
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
-	}
-
-	onunload() {
-
-	}
-
-	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-	}
-
-	async saveSettings() {
-		await this.saveData(this.settings);
-	}
-}
-
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
-
-	onOpen() {
-		const {contentEl} = this;
-		contentEl.setText('Woah!');
-	}
-
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
-	}
-}
-
-class SampleSettingTab extends PluginSettingTab {
-	plugin: MyPlugin;
-
-	constructor(app: App, plugin: MyPlugin) {
-		super(app, plugin);
-		this.plugin = plugin;
-	}
-
-	display(): void {
-		const {containerEl} = this;
-
-		containerEl.empty();
-
-		new Setting(containerEl)
-			.setName('Setting #1')
-			.setDesc('It\'s a secret')
-			.addText(text => text
-				.setPlaceholder('Enter your secret')
-				.setValue(this.plugin.settings.mySetting)
-				.onChange(async (value) => {
-					this.plugin.settings.mySetting = value;
-					await this.plugin.saveSettings();
-				}));
+		console.log(process.cwd());
+		this.loadDict(this.dictPath);
+		this.spellChecker = new SpellChecker(this.dictWords);
+		this.registerEditorExtension(this.printCurrentWord());
+		this.registerEvent(this.app.workspace.on("editor-change", this.getCurrentWord.bind(this)));
 	}
 }
