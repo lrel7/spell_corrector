@@ -1,7 +1,7 @@
 {
 	"id": "spell-corrector",
 	"name": "Auto Spell Corrector",
-	"version": "0.0.0.230805_alpha",
+	"version": "0.0.1.230806_alpha",
 	"minAppVersion": "0.15.0",
 	"description": "This is an auto spell corrector for Obsidian. This plugin demonstrates some of the capabilities of the Obsidian API.",
 	"author": "lrel7",

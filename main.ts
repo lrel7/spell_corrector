@@ -1,4 +1,4 @@
-import { Plugin, Editor, EditorPosition } from 'obsidian';
+import { Plugin, Editor, EditorPosition, Notice } from 'obsidian';
 import { keymap } from '@codemirror/view'
 import { Extension, Prec } from '@codemirror/state';
 import * as fs from 'fs';
@@ -64,9 +64,11 @@ class SpellChecker {
 export default class MyPlugin extends Plugin {
 	private currentWord: string = '';
 	private replacement: string | undefined = undefined;
+	private oldWord: string = '';
 	private dictPath = 'E:\\笔记\\.obsidian\\plugins\\spell_corrector\\dict.txt';
 	private dictWords: string[];
 	private spellChecker: SpellChecker | null = null;
+	private flag: boolean = false;
 
 	private printCurrentWord = (): Extension => Prec.high(keymap.of([
 		{
@@ -81,6 +83,27 @@ export default class MyPlugin extends Plugin {
 				if (editor) {
 					this.replaceWrongWord(editor);
 				}
+				this.flag = true;
+				return false;
+			}
+		},
+		{
+			key: 'Tab',
+			run: (): boolean => {
+				if (this.flag === false) {
+					return false;
+				}
+				const editor = this.app.workspace.activeEditor?.editor;
+				if (editor) {
+					this.undoReplacement(editor);
+				}
+				return true;
+			}
+		},
+		{
+			key: '',
+			run: (): boolean => {
+				this.flag = false;
 				return false;
 			}
 		}
@@ -102,7 +125,19 @@ export default class MyPlugin extends Plugin {
 			const cursor = editor.getCursor();
 			const from: EditorPosition = { line: cursor.line, ch: cursor.ch - this.currentWord.length };
 			const to: EditorPosition = { line: cursor.line, ch: cursor.ch };
+			this.oldWord = this.currentWord;
 			editor.replaceRange(this.replacement, from, to);
+			new Notice("Replaced " + "\'" + this.oldWord + "\'" + " with " + "\'" + this.replacement + "\'");
+		}
+	}
+
+	private undoReplacement(editor: Editor) {
+		if (this.replacement && this.oldWord) {
+			const cursor = editor.getCursor();
+			const from: EditorPosition = { line: cursor.line, ch: cursor.ch - this.replacement.length - 1 };
+			const to: EditorPosition = { line: cursor.line, ch: cursor.ch -1 };
+			editor.replaceRange(this.oldWord, from, to);
+			new Notice("Undo replacement!");
 		}
 	}
 

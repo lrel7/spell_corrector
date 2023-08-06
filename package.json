@@ -1,6 +1,6 @@
 {
 	"name": "spell-corrector",
-	"version": "0.0.0.230805_alpha",
+	"version": "0.0.1.230806_alpha",
 	"description": "This is an auto spell corrector for Obsidian (https://obsidian.md)",
 	"main": "main.js",
 	"scripts": {
